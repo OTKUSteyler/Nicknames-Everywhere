@@ -1,5 +1,23 @@
+/**
+ * Nicknames Everywhere — Kettu/Bunny Plugin
+ * 
+ * Set custom nicknames for any user that persist across all servers and DMs.
+ * Unlike Discord's native nicknames (which are server-specific), these
+ * nicknames follow the user everywhere you see them.
+ *
+ * Features:
+ * - Set nicknames via long-press menu
+ * - Filter users by ID, username, or tag
+ * - Search and manage all nicknames in settings
+ * - Export/import nickname lists
+ * - Optional nickname prefix/suffix
+ * - Whitelist/Blacklist modes
+ *
+ * Created by: [Your Name]
+ */
+
 import { findByProps, findByName, findByStoreName } from "@vendetta/metro";
-import { after, before } from "@vendetta/patcher";
+import { after } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 import { React, ReactNative as RN } from "@vendetta/metro/common";
 import { showInputAlert, showConfirmationAlert } from "@vendetta/ui/alerts";
@@ -18,21 +36,17 @@ if (!storage.settings) {
         showPrefix: false,
         prefix: "[",
         suffix: "]",
-        filterMode: "none", // "none", "whitelist", "blacklist"
-        filteredUsers: [], // Array of user IDs to filter
+        filterMode: "none",
+        filteredUsers: [],
         overrideServerNicks: true,
     };
 }
 
 let unpatches: Function[] = [];
 
-/**
- * Get the custom nickname for a user ID
- */
 function getNickname(userId: string): string | null {
     if (!storage.settings.enabled) return null;
     
-    // Check filter mode
     const { filterMode, filteredUsers } = storage.settings;
     
     if (filterMode === "blacklist" && filteredUsers.includes(userId)) {
@@ -46,7 +60,6 @@ function getNickname(userId: string): string | null {
     const nickname = storage.nicknames[userId];
     if (!nickname) return null;
     
-    // Apply prefix/suffix if enabled
     if (storage.settings.showPrefix) {
         return `${storage.settings.prefix}${nickname}${storage.settings.suffix}`;
     }
@@ -54,9 +67,6 @@ function getNickname(userId: string): string | null {
     return nickname;
 }
 
-/**
- * Set a custom nickname for a user ID
- */
 function setNickname(userId: string, nickname: string) {
     if (!nickname || nickname.trim() === "") {
         delete storage.nicknames[userId];
@@ -65,32 +75,20 @@ function setNickname(userId: string, nickname: string) {
     }
 }
 
-/**
- * Add user to filter list
- */
 function addToFilter(userId: string) {
     if (!storage.settings.filteredUsers.includes(userId)) {
         storage.settings.filteredUsers.push(userId);
     }
 }
 
-/**
- * Remove user from filter list
- */
 function removeFromFilter(userId: string) {
     storage.settings.filteredUsers = storage.settings.filteredUsers.filter(id => id !== userId);
 }
 
-/**
- * Check if user is in filter list
- */
 function isFiltered(userId: string): boolean {
     return storage.settings.filteredUsers.includes(userId);
 }
 
-/**
- * Show a prompt to set/edit a nickname
- */
 function promptSetNickname(userId: string, currentName: string) {
     const currentNickname = storage.nicknames[userId] || "";
     
@@ -115,9 +113,6 @@ function promptSetNickname(userId: string, currentName: string) {
     });
 }
 
-/**
- * Patch username displays to show custom nicknames
- */
 function patchUsernames() {
     const usernameComponents = [
         "Username",
@@ -158,9 +153,6 @@ function patchUsernames() {
     }
 }
 
-/**
- * Patch the getName function used throughout Discord
- */
 function patchGetName() {
     try {
         const UserUtils = findByProps("getUser", "getCurrentUser", false);
@@ -193,9 +185,6 @@ function patchGetName() {
     }
 }
 
-/**
- * Patch the GuildMemberStore to override nicknames
- */
 function patchMemberStore() {
     try {
         const GuildMemberStore = findByProps("getNick", "getMember", false);
@@ -216,303 +205,105 @@ function patchMemberStore() {
     }
 }
 
-/**
- * Patch the user profile bottom sheet (where Block button is)
- */
-function patchUserProfileSheet() {
-    try {
-        // Find the UserProfileSheet or BottomSheet component
-        const ProfileActions = findByProps("UserProfileActionButtons", false) ||
-                              findByProps("ProfileActionButtons", false) ||
-                              findByName("UserProfileActionButtons", false);
-
-        if (ProfileActions) {
-            const target = ProfileActions.default || ProfileActions.UserProfileActionButtons || ProfileActions;
-            
-            const unpatch = after("type", target, (args, res) => {
-                try {
-                    const props = args[0];
-                    const userId = props?.user?.id || props?.userId;
-                    
-                    if (!userId || !res) return res;
-
-                    const currentNickname = storage.nicknames[userId];
-                    const isUserFiltered = isFiltered(userId);
-                    const { filterMode } = storage.settings;
-                    const displayName = props?.user?.globalName || props?.user?.username || "User";
-
-                    // Create our custom buttons
-                    const NicknameButton = (
-                        <TouchableOpacity
-                            key="nickname-button"
-                            style={{
-                                backgroundColor: "#5865f2",
-                                padding: 12,
-                                borderRadius: 8,
-                                marginHorizontal: 16,
-                                marginTop: 8,
-                                flexDirection: "row",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: 8
-                            }}
-                            onPress={() => promptSetNickname(userId, displayName)}
-                        >
-                            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
-                                {currentNickname ? "✏️ Edit Nickname" : "✏️ Set Nickname"}
-                            </Text>
-                        </TouchableOpacity>
-                    );
-
-                    const FilterButton = filterMode !== "none" ? (
-                        <TouchableOpacity
-                            key="filter-button"
-                            style={{
-                                backgroundColor: isUserFiltered ? "#ed4245" : "#3ba55d",
-                                padding: 12,
-                                borderRadius: 8,
-                                marginHorizontal: 16,
-                                marginTop: 8,
-                                flexDirection: "row",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: 8
-                            }}
-                            onPress={() => {
-                                if (isUserFiltered) {
-                                    removeFromFilter(userId);
-                                    const { showToast } = findByProps("showToast") || {};
-                                    if (showToast) showToast(`✅ Removed from ${filterMode}`, 1);
-                                } else {
-                                    addToFilter(userId);
-                                    const { showToast } = findByProps("showToast") || {};
-                                    if (showToast) showToast(`✅ Added to ${filterMode}`, 1);
-                                }
-                            }}
-                        >
-                            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "600" }}>
-                                {isUserFiltered 
-                                    ? `➖ Remove from ${filterMode}`
-                                    : `➕ Add to ${filterMode}`
-                                }
-                            </Text>
-                        </TouchableOpacity>
-                    ) : null;
-
-                    // Inject buttons into the component tree
-                    if (res?.props?.children) {
-                        if (Array.isArray(res.props.children)) {
-                            res.props.children.push(NicknameButton);
-                            if (FilterButton) res.props.children.push(FilterButton);
-                        } else {
-                            res.props.children = [res.props.children, NicknameButton, FilterButton];
-                        }
-                    }
-                } catch (e) {
-                    console.error("[NicknamesEverywhere] Error in profile sheet patch:", e);
-                }
-                return res;
-            });
-            unpatches.push(unpatch);
-            console.log("[NicknamesEverywhere] Patched user profile sheet");
-        }
-    } catch (e) {
-        console.error("[NicknamesEverywhere] Error patching user profile sheet:", e);
-    }
-}
-
-/**
- * Patch the user profile options menu (... menu where Block is)
- */
-function patchUserProfileMenu() {
-    try {
-        // Find the module that builds the overflow menu options
-        const UserProfile = findByProps("getUserProfileBottomSheetOptions", false) ||
-                           findByProps("openUserProfileActionSheet", false);
-
-        if (UserProfile) {
-            // Find the function that returns menu options
-            const buildOptions = UserProfile.getUserProfileBottomSheetOptions || 
-                               UserProfile.openUserProfileActionSheet ||
-                               UserProfile.getOptions;
-
-            if (buildOptions) {
-                const unpatch = after("getUserProfileBottomSheetOptions", UserProfile, (args, options) => {
-                    try {
-                        const userId = args[0]?.userId || args[0]?.user?.id;
-                        
-                        if (!userId || !Array.isArray(options)) return options;
-
-                        const currentNickname = storage.nicknames[userId];
-                        const isUserFiltered = isFiltered(userId);
-                        const { filterMode } = storage.settings;
-                        const user = args[0]?.user || {};
-                        const displayName = user.globalName || user.username || "User";
-
-                        // Add Set/Edit Nickname option
-                        options.push({
-                            key: "set-nickname",
-                            label: currentNickname ? "✏️ Edit Nickname" : "✏️ Set Nickname",
-                            onPress: () => promptSetNickname(userId, displayName)
-                        });
-
-                        // Add Remove Nickname option if one exists
-                        if (currentNickname) {
-                            options.push({
-                                key: "remove-nickname",
-                                label: "🗑️ Remove Nickname",
-                                onPress: () => {
-                                    setNickname(userId, "");
-                                    const { showToast } = findByProps("showToast") || {};
-                                    if (showToast) showToast("✅ Nickname removed", 1);
-                                }
-                            });
-                        }
-
-                        // Add filter options
-                        if (filterMode === "whitelist") {
-                            options.push({
-                                key: isUserFiltered ? "remove-whitelist" : "add-whitelist",
-                                label: isUserFiltered ? "➖ Remove from Whitelist" : "➕ Add to Whitelist",
-                                onPress: () => {
-                                    if (isUserFiltered) {
-                                        removeFromFilter(userId);
-                                        const { showToast } = findByProps("showToast") || {};
-                                        if (showToast) showToast("✅ Removed from whitelist", 1);
-                                    } else {
-                                        addToFilter(userId);
-                                        const { showToast } = findByProps("showToast") || {};
-                                        if (showToast) showToast("✅ Added to whitelist", 1);
-                                    }
-                                }
-                            });
-                        } else if (filterMode === "blacklist") {
-                            options.push({
-                                key: isUserFiltered ? "remove-blacklist" : "add-blacklist",
-                                label: isUserFiltered ? "➖ Remove from Blacklist" : "➕ Add to Blacklist",
-                                onPress: () => {
-                                    if (isUserFiltered) {
-                                        removeFromFilter(userId);
-                                        const { showToast } = findByProps("showToast") || {};
-                                        if (showToast) showToast("✅ Removed from blacklist", 1);
-                                    } else {
-                                        addToFilter(userId);
-                                        const { showToast } = findByProps("showToast") || {};
-                                        if (showToast) showToast("✅ Added to blacklist", 1);
-                                    }
-                                }
-                            });
-                        }
-                    } catch (e) {
-                        console.error("[NicknamesEverywhere] Error in profile menu patch:", e);
-                    }
-                    return options;
-                });
-                unpatches.push(unpatch);
-                console.log("[NicknamesEverywhere] Patched user profile menu");
-            }
-        }
-    } catch (e) {
-        console.error("[NicknamesEverywhere] Error patching user profile menu:", e);
-    }
-}
-
-/**
- * Add options to user context menus (long-press on messages)
- */
 function patchUserContextMenu() {
     try {
-        const MessageActions = findByProps("openUserContextMenu", false) || 
-                              findByProps("showUserProfileActionSheet", false) ||
-                              findByProps("MessageContextMenu", false);
-        
-        if (!MessageActions) {
-            console.warn("[NicknamesEverywhere] Could not find MessageActions module");
-            return;
-        }
+        const modules = [
+            findByProps("openUserContextMenu", false),
+            findByProps("showUserProfileActionSheet", false),
+            findByProps("openContextMenuLazy", false),
+        ].filter(Boolean);
 
-        // Try multiple possible function names
-        const possibleFunctions = ["getUserActions", "buildActions", "getActions", "default"];
-        
-        for (const funcName of possibleFunctions) {
-            const buildFunction = MessageActions[funcName];
+        for (const UserActions of modules) {
+            if (!UserActions) continue;
+
+            const functionNames = ["getUserActions", "buildActions", "getActions"];
             
-            if (buildFunction && typeof buildFunction === "function") {
-                const unpatch = after(funcName, MessageActions, (args, actions) => {
+            for (const fnName of functionNames) {
+                if (UserActions[fnName]) {
                     try {
-                        const user = args[0]?.user || args[0];
-                        
-                        if (!user?.id || !Array.isArray(actions)) return actions;
-
-                        const currentNickname = storage.nicknames[user.id];
-                        const isUserFiltered = isFiltered(user.id);
-                        const { filterMode } = storage.settings;
-                        
-                        // Set/Edit Nickname
-                        actions.push({
-                            key: "set-nickname",
-                            label: currentNickname ? "✏️ Edit Nickname" : "✏️ Set Nickname",
-                            onPress: () => {
-                                const displayName = user.globalName || user.username || "User";
-                                promptSetNickname(user.id, displayName);
-                            }
+                        const unpatch = after(fnName, UserActions, (args, actions) => {
+                            try {
+                                const user = args[0]?.user || args[0];
+                                
+                                if (user?.id && Array.isArray(actions)) {
+                                    const currentNickname = storage.nicknames[user.id];
+                                    const isUserFiltered = isFiltered(user.id);
+                                    const { filterMode } = storage.settings;
+                                    
+                                    actions.push({
+                                        key: "set-nickname",
+                                        label: currentNickname ? "✏️ Edit Nickname" : "✏️ Set Nickname",
+                                        onPress: () => {
+                                            const displayName = user.globalName || user.username || "User";
+                                            promptSetNickname(user.id, displayName);
+                                        }
+                                    });
+                                    
+                                    if (currentNickname) {
+                                        actions.push({
+                                            key: "remove-nickname",
+                                            label: "🗑️ Remove Nickname",
+                                            onPress: () => {
+                                                setNickname(user.id, "");
+                                                const { showToast } = findByProps("showToast") || {};
+                                                if (showToast) showToast("✅ Nickname removed", 1);
+                                            }
+                                        });
+                                    }
+                                    
+                                    if (filterMode === "whitelist") {
+                                        if (isUserFiltered) {
+                                            actions.push({
+                                                key: "remove-whitelist",
+                                                label: "➖ Remove from Whitelist",
+                                                onPress: () => {
+                                                    removeFromFilter(user.id);
+                                                    const { showToast } = findByProps("showToast") || {};
+                                                    if (showToast) showToast("✅ Removed from whitelist", 1);
+                                                }
+                                            });
+                                        } else {
+                                            actions.push({
+                                                key: "add-whitelist",
+                                                label: "➕ Add to Whitelist",
+                                                onPress: () => {
+                                                    addToFilter(user.id);
+                                                    const { showToast } = findByProps("showToast") || {};
+                                                    if (showToast) showToast("✅ Added to whitelist", 1);
+                                                }
+                                            });
+                                        }
+                                    } else if (filterMode === "blacklist") {
+                                        if (isUserFiltered) {
+                                            actions.push({
+                                                key: "remove-blacklist",
+                                                label: "➖ Remove from Blacklist",
+                                                onPress: () => {
+                                                    removeFromFilter(user.id);
+                                                    const { showToast } = findByProps("showToast") || {};
+                                                    if (showToast) showToast("✅ Removed from blacklist", 1);
+                                                }
+                                            });
+                                        } else {
+                                            actions.push({
+                                                key: "add-blacklist",
+                                                label: "➕ Add to Blacklist",
+                                                onPress: () => {
+                                                    addToFilter(user.id);
+                                                    const { showToast } = findByProps("showToast") || {};
+                                                    if (showToast) showToast("✅ Added to blacklist", 1);
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
+                            } catch (e) {}
+                            
+                            return actions;
                         });
-                        
-                        // Remove Nickname
-                        if (currentNickname) {
-                            actions.push({
-                                key: "remove-nickname",
-                                label: "🗑️ Remove Nickname",
-                                onPress: () => {
-                                    setNickname(user.id, "");
-                                    const { showToast } = findByProps("showToast") || {};
-                                    if (showToast) showToast("✅ Nickname removed", 1);
-                                }
-                            });
-                        }
-                        
-                        // Filter options
-                        if (filterMode === "whitelist") {
-                            actions.push({
-                                key: isUserFiltered ? "remove-whitelist" : "add-whitelist",
-                                label: isUserFiltered ? "➖ Remove from Whitelist" : "➕ Add to Whitelist",
-                                onPress: () => {
-                                    if (isUserFiltered) {
-                                        removeFromFilter(user.id);
-                                    } else {
-                                        addToFilter(user.id);
-                                    }
-                                    const { showToast } = findByProps("showToast") || {};
-                                    if (showToast) {
-                                        showToast(isUserFiltered ? "✅ Removed from whitelist" : "✅ Added to whitelist", 1);
-                                    }
-                                }
-                            });
-                        } else if (filterMode === "blacklist") {
-                            actions.push({
-                                key: isUserFiltered ? "remove-blacklist" : "add-blacklist",
-                                label: isUserFiltered ? "➖ Remove from Blacklist" : "➕ Add to Blacklist",
-                                onPress: () => {
-                                    if (isUserFiltered) {
-                                        removeFromFilter(user.id);
-                                    } else {
-                                        addToFilter(user.id);
-                                    }
-                                    const { showToast } = findByProps("showToast") || {};
-                                    if (showToast) {
-                                        showToast(isUserFiltered ? "✅ Removed from blacklist" : "✅ Added to blacklist", 1);
-                                    }
-                                }
-                            });
-                        }
-                    } catch (e) {
-                        console.error("[NicknamesEverywhere] Error in context menu patch:", e);
-                    }
-                    return actions;
-                });
-                unpatches.push(unpatch);
-                console.log(`[NicknamesEverywhere] Patched user context menu (${funcName})`);
-                break;
+                        unpatches.push(unpatch);
+                    } catch (e) {}
+                }
             }
         }
     } catch (e) {
@@ -520,9 +311,6 @@ function patchUserContextMenu() {
     }
 }
 
-/**
- * Patch message components to show nicknames
- */
 function patchMessages() {
     try {
         const MessageHeader = findByName("MessageHeader", false) || 
@@ -573,25 +361,20 @@ function patchMessages() {
     }
 }
 
-/**
- * Settings Page Component
- */
 function SettingsPage() {
     useProxy(storage);
     const UserStore = findByStoreName("UserStore");
     const [searchQuery, setSearchQuery] = React.useState("");
 
-    // Get user info for display
     const getUserInfo = (userId: string) => {
         try {
             const user = UserStore?.getUser(userId);
-            return user ? `${user.username}${user.discriminator !== "0" ? `#${user.discriminator}` : ""}` : userId;
+            return user ? `${user.username}#${user.discriminator}` : userId;
         } catch {
             return userId;
         }
     };
 
-    // Filter nicknames by search
     const filteredNicknames = Object.entries(storage.nicknames).filter(([userId, nickname]) => {
         if (!searchQuery) return true;
         const userInfo = getUserInfo(userId).toLowerCase();
@@ -609,9 +392,7 @@ function SettingsPage() {
                     trailing={
                         <FormSwitch
                             value={storage.settings.enabled}
-                            onValueChange={(v: boolean) => {
-                                storage.settings.enabled = v;
-                            }}
+                            onValueChange={(v: boolean) => storage.settings.enabled = v}
                         />
                     }
                 />
@@ -622,9 +403,7 @@ function SettingsPage() {
                     trailing={
                         <FormSwitch
                             value={storage.settings.overrideServerNicks}
-                            onValueChange={(v: boolean) => {
-                                storage.settings.overrideServerNicks = v;
-                            }}
+                            onValueChange={(v: boolean) => storage.settings.overrideServerNicks = v}
                         />
                     }
                 />
@@ -639,9 +418,7 @@ function SettingsPage() {
                     trailing={
                         <FormSwitch
                             value={storage.settings.showPrefix}
-                            onValueChange={(v: boolean) => {
-                                storage.settings.showPrefix = v;
-                            }}
+                            onValueChange={(v: boolean) => storage.settings.showPrefix = v}
                         />
                     }
                 />
@@ -652,18 +429,14 @@ function SettingsPage() {
                             label="Prefix"
                             placeholder="["
                             value={storage.settings.prefix}
-                            onChange={(v: string) => {
-                                storage.settings.prefix = v;
-                            }}
+                            onChange={(v: string) => storage.settings.prefix = v}
                         />
                         
                         <FormInput
                             label="Suffix"
                             placeholder="]"
                             value={storage.settings.suffix}
-                            onChange={(v: string) => {
-                                storage.settings.suffix = v;
-                            }}
+                            onChange={(v: string) => storage.settings.suffix = v}
                         />
                         
                         <View style={{ padding: 16, backgroundColor: "#2b2d31", marginHorizontal: 16, marginTop: 8, borderRadius: 8 }}>
@@ -679,7 +452,7 @@ function SettingsPage() {
 
             <FormSection title="Filter Mode">
                 <FormText>
-                    Control which users' nicknames are shown. Use the user profile menu or long-press menu to add/remove users.
+                    Control which users' nicknames are shown. Use the long-press menu on users to add/remove them from the list.
                 </FormText>
                 
                 <FormRow
@@ -688,9 +461,7 @@ function SettingsPage() {
                     trailing={
                         <FormSwitch
                             value={storage.settings.filterMode === "none"}
-                            onValueChange={() => {
-                                storage.settings.filterMode = "none";
-                            }}
+                            onValueChange={() => storage.settings.filterMode = "none"}
                         />
                     }
                 />
@@ -701,9 +472,7 @@ function SettingsPage() {
                     trailing={
                         <FormSwitch
                             value={storage.settings.filterMode === "whitelist"}
-                            onValueChange={() => {
-                                storage.settings.filterMode = "whitelist";
-                            }}
+                            onValueChange={() => storage.settings.filterMode = "whitelist"}
                         />
                     }
                 />
@@ -714,9 +483,7 @@ function SettingsPage() {
                     trailing={
                         <FormSwitch
                             value={storage.settings.filterMode === "blacklist"}
-                            onValueChange={() => {
-                                storage.settings.filterMode = "blacklist";
-                            }}
+                            onValueChange={() => storage.settings.filterMode = "blacklist"}
                         />
                     }
                 />
@@ -758,7 +525,7 @@ function SettingsPage() {
 
             <FormSection title={`Saved Nicknames (${Object.keys(storage.nicknames).length})`}>
                 <FormText>
-                    Search and manage all your saved nicknames. Open user profiles or long-press messages to set nicknames.
+                    Search and manage all your saved nicknames. You can also set nicknames by long-pressing on any user.
                 </FormText>
                 
                 <View style={{ padding: 16 }}>
@@ -782,7 +549,7 @@ function SettingsPage() {
                                 {searchQuery ? "No nicknames found matching your search" : "No nicknames saved yet"}
                             </Text>
                             <Text style={{ color: "#666", textAlign: "center", fontSize: 12, marginTop: 8 }}>
-                                {!searchQuery && "Open a user profile or long-press a message to set a nickname"}
+                                {!searchQuery && "Long-press any user and select 'Set Nickname' to get started"}
                             </Text>
                         </View>
                     ) : (
@@ -923,8 +690,6 @@ export default {
             patchUsernames();
             patchMessages();
             patchUserContextMenu();
-            patchUserProfileMenu();
-            patchUserProfileSheet();
             
             console.log(`[NicknamesEverywhere] Loaded with ${Object.keys(storage.nicknames).length} saved nicknames`);
             console.log(`[NicknamesEverywhere] Applied ${unpatches.length} patches`);
