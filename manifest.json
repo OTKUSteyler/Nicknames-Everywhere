@@ -1,6 +1,6 @@
 {
     "name": "Nicknames Everywhere",
-    "description": "A plugin for use as a template.",
+    "description": "Set custom nicknames for any user that persist across all servers and DMs.",
     "authors": [
         {
             "name": "btmc727",
