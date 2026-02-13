@@ -1,10 +1,14 @@
 /**
- * Nicknames Everywhere — Kettu/Bunny Plugin
- * Mobile-optimized version
+ * Nicknames Everywhere - Kettu/Bunny Plugin
+ * By: [Your Name]
+ * 
+ * Set custom nicknames for any user that persist across all servers and DMs.
+ * Mobile-optimized with proper cleanup and patching patterns.
  */
 
+import { logger } from "@vendetta";
 import { findByProps, findByStoreName } from "@vendetta/metro";
-import { after } from "@vendetta/patcher";
+import { before, after } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 import { React, ReactNative as RN } from "@vendetta/metro/common";
 import { showInputAlert, showConfirmationAlert } from "@vendetta/ui/alerts";
@@ -27,10 +31,16 @@ if (!storage.settings) {
     };
 }
 
-let unpatches = [];
+// Cleanup references
+let unpatches: (() => void)[] = [];
+let origGetName: Function | null = null;
+let origGetDisplayName: Function | null = null;
+let origGetNick: Function | null = null;
+let UserUtilsModule: any = null;
+let GuildMemberStoreModule: any = null;
 
 // Helper functions
-function getNickname(userId) {
+function getNickname(userId: string): string | null {
     if (!storage.settings.enabled || !userId) return null;
     const nickname = storage.nicknames[userId];
     if (!nickname) return null;
@@ -41,7 +51,7 @@ function getNickname(userId) {
     return nickname;
 }
 
-function setNickname(userId, nickname) {
+function setNickname(userId: string, nickname: string) {
     if (!nickname || nickname.trim() === "") {
         delete storage.nicknames[userId];
     } else {
@@ -49,7 +59,14 @@ function setNickname(userId, nickname) {
     }
 }
 
-function promptSetNickname(userId, currentName) {
+function showToast(message: string, type: number = 1) {
+    const ToastModule = findByProps("showToast");
+    if (ToastModule?.showToast) {
+        ToastModule.showToast(message, type);
+    }
+}
+
+function promptSetNickname(userId: string, currentName: string) {
     const currentNickname = storage.nicknames[userId] || "";
     
     showInputAlert({
@@ -58,85 +75,112 @@ function promptSetNickname(userId, currentName) {
         initialValue: currentNickname,
         confirmText: "Save",
         cancelText: "Cancel",
-        onConfirm: (value) => {
+        onConfirm: (value: string) => {
             setNickname(userId, value);
-            const ToastModule = findByProps("showToast");
-            if (ToastModule?.showToast) {
-                if (value.trim()) {
-                    ToastModule.showToast("Nickname saved", 1);
-                } else {
-                    ToastModule.showToast("Nickname removed", 1);
-                }
+            if (value.trim()) {
+                showToast(`Nickname set to "${value}"`);
+            } else {
+                showToast("Nickname removed");
             }
         }
     });
 }
 
 // Patching functions
-function patchGetName() {
+function patchUserUtils() {
     try {
-        const UserUtils = findByProps("getUser", "getCurrentUser");
+        UserUtilsModule = findByProps("getUser", "getCurrentUser");
         
-        if (UserUtils?.getName) {
-            unpatches.push(after("getName", UserUtils, (args, ret) => {
-                const user = args[0];
-                if (user?.id) {
-                    const nick = getNickname(user.id);
-                    if (nick) return nick;
-                }
-                return ret;
-            }));
+        if (!UserUtilsModule) {
+            logger.warn("[NicknamesEverywhere] UserUtils module not found");
+            return;
         }
 
-        if (UserUtils?.getDisplayName) {
-            unpatches.push(after("getDisplayName", UserUtils, (args, ret) => {
+        // Save originals for cleanup
+        if (UserUtilsModule.getName) {
+            origGetName = UserUtilsModule.getName;
+            
+            UserUtilsModule.getName = function(...args: any[]) {
                 const user = args[0];
                 if (user?.id) {
                     const nick = getNickname(user.id);
                     if (nick) return nick;
                 }
-                return ret;
-            }));
+                return (origGetName as Function).apply(this, args);
+            };
         }
+
+        if (UserUtilsModule.getDisplayName) {
+            origGetDisplayName = UserUtilsModule.getDisplayName;
+            
+            UserUtilsModule.getDisplayName = function(...args: any[]) {
+                const user = args[0];
+                if (user?.id) {
+                    const nick = getNickname(user.id);
+                    if (nick) return nick;
+                }
+                return (origGetDisplayName as Function).apply(this, args);
+            };
+        }
+
+        logger.log("[NicknamesEverywhere] UserUtils patched (getName, getDisplayName)");
     } catch (e) {
-        console.error("[NicknamesEverywhere] Error patching UserUtils:", e);
+        logger.error("[NicknamesEverywhere] Error patching UserUtils:", e);
     }
 }
 
-function patchMemberStore() {
+function patchGuildMemberStore() {
     try {
-        const GuildMemberStore = findByProps("getNick", "getMember");
+        GuildMemberStoreModule = findByProps("getNick", "getMember");
         
-        if (GuildMemberStore?.getNick && storage.settings.overrideServerNicks) {
-            unpatches.push(after("getNick", GuildMemberStore, (args, ret) => {
-                const userId = args[1];
-                if (userId) {
-                    const nick = getNickname(userId);
-                    if (nick) return nick;
-                }
-                return ret;
-            }));
+        if (!GuildMemberStoreModule || !GuildMemberStoreModule.getNick) {
+            logger.warn("[NicknamesEverywhere] GuildMemberStore.getNick not found");
+            return;
         }
+
+        if (!storage.settings.overrideServerNicks) {
+            logger.log("[NicknamesEverywhere] Server nickname override disabled");
+            return;
+        }
+
+        origGetNick = GuildMemberStoreModule.getNick;
+        
+        GuildMemberStoreModule.getNick = function(...args: any[]) {
+            const userId = args[1]; // getNick(guildId, userId)
+            if (userId) {
+                const nick = getNickname(userId);
+                if (nick) return nick;
+            }
+            return (origGetNick as Function).apply(this, args);
+        };
+
+        logger.log("[NicknamesEverywhere] GuildMemberStore.getNick patched");
     } catch (e) {
-        console.error("[NicknamesEverywhere] Error patching GuildMemberStore:", e);
+        logger.error("[NicknamesEverywhere] Error patching GuildMemberStore:", e);
     }
 }
 
 function patchUserActions() {
     try {
-        // Try to find user action modules
+        // Try multiple possible module locations
         const actionModules = [
             findByProps("openUserContextMenu"),
             findByProps("showUserActionSheet"),
+            findByProps("getUserActions"),
         ].filter(Boolean);
 
+        if (actionModules.length === 0) {
+            logger.warn("[NicknamesEverywhere] No user action modules found");
+            return;
+        }
+
         for (const mod of actionModules) {
-            const funcNames = ["getUserActions", "getActions"];
+            const funcNames = ["getUserActions", "getActions", "buildActions"];
             
             for (const fname of funcNames) {
                 if (typeof mod[fname] === "function") {
                     try {
-                        unpatches.push(after(fname, mod, (args, actions) => {
+                        const unpatch = after(fname, mod, (args, actions) => {
                             if (!Array.isArray(actions)) return actions;
                             
                             const user = args[0]?.user || args[0];
@@ -148,7 +192,7 @@ function patchUserActions() {
                             // Add Set/Edit Nickname option
                             actions.push({
                                 key: "set-nickname",
-                                label: currentNick ? "Edit Nickname" : "Set Nickname",
+                                label: currentNick ? "✏️ Edit Nickname" : "✏️ Set Nickname",
                                 icon: "ic_edit",
                                 onPress: () => promptSetNickname(user.id, displayName)
                             });
@@ -157,27 +201,29 @@ function patchUserActions() {
                             if (currentNick) {
                                 actions.push({
                                     key: "remove-nickname",
-                                    label: "Remove Nickname",
+                                    label: "🗑️ Remove Nickname",
                                     icon: "ic_message_delete",
                                     destructive: true,
                                     onPress: () => {
                                         setNickname(user.id, "");
-                                        const ToastModule = findByProps("showToast");
-                                        if (ToastModule?.showToast) {
-                                            ToastModule.showToast("Nickname removed", 1);
-                                        }
+                                        showToast("Nickname removed");
                                     }
                                 });
                             }
                             
                             return actions;
-                        }));
-                    } catch (e) {}
+                        });
+                        
+                        unpatches.push(unpatch);
+                        logger.log(`[NicknamesEverywhere] Patched ${fname} in user actions`);
+                    } catch (e) {
+                        // Try next function
+                    }
                 }
             }
         }
     } catch (e) {
-        console.error("[NicknamesEverywhere] Error patching user actions:", e);
+        logger.error("[NicknamesEverywhere] Error patching user actions:", e);
     }
 }
 
@@ -187,10 +233,10 @@ function SettingsPage() {
     const UserStore = findByStoreName("UserStore");
     const [searchQuery, setSearchQuery] = React.useState("");
 
-    const getUserInfo = (userId) => {
+    const getUserInfo = (userId: string) => {
         try {
             const user = UserStore?.getUser(userId);
-            return user ? `${user.username}` : userId;
+            return user ? user.username : userId;
         } catch {
             return userId;
         }
@@ -199,7 +245,7 @@ function SettingsPage() {
     const filteredNicknames = Object.entries(storage.nicknames).filter(([userId, nickname]) => {
         if (!searchQuery) return true;
         const userInfo = getUserInfo(userId).toLowerCase();
-        const nickLower = nickname.toLowerCase();
+        const nickLower = (nickname as string).toLowerCase();
         const queryLower = searchQuery.toLowerCase();
         return userInfo.includes(queryLower) || nickLower.includes(queryLower);
     });
@@ -212,10 +258,10 @@ function SettingsPage() {
             { title: "General Settings" },
             React.createElement(FormRow, {
                 label: "Enable Nicknames",
-                subLabel: "Toggle nickname functionality",
+                subLabel: "Toggle all nickname functionality",
                 trailing: React.createElement(FormSwitch, {
                     value: storage.settings.enabled,
-                    onValueChange: (v) => { storage.settings.enabled = v; }
+                    onValueChange: (v: boolean) => { storage.settings.enabled = v; }
                 })
             }),
             React.createElement(FormRow, {
@@ -223,7 +269,13 @@ function SettingsPage() {
                 subLabel: "Use custom nicknames instead of server ones",
                 trailing: React.createElement(FormSwitch, {
                     value: storage.settings.overrideServerNicks,
-                    onValueChange: (v) => { storage.settings.overrideServerNicks = v; }
+                    onValueChange: (v: boolean) => { 
+                        storage.settings.overrideServerNicks = v;
+                        // Re-patch if enabling
+                        if (v && !origGetNick) {
+                            patchGuildMemberStore();
+                        }
+                    }
                 })
             })
         ),
@@ -233,24 +285,31 @@ function SettingsPage() {
             { title: "Display Options" },
             React.createElement(FormRow, {
                 label: "Show Prefix/Suffix",
-                subLabel: "Add text around nicknames",
+                subLabel: "Add decorative text around nicknames",
                 trailing: React.createElement(FormSwitch, {
                     value: storage.settings.showPrefix,
-                    onValueChange: (v) => { storage.settings.showPrefix = v; }
+                    onValueChange: (v: boolean) => { storage.settings.showPrefix = v; }
                 })
             }),
             storage.settings.showPrefix && React.createElement(FormInput, {
                 label: "Prefix",
                 placeholder: "[",
                 value: storage.settings.prefix,
-                onChange: (v) => { storage.settings.prefix = v; }
+                onChange: (v: string) => { storage.settings.prefix = v; }
             }),
             storage.settings.showPrefix && React.createElement(FormInput, {
                 label: "Suffix",
                 placeholder: "]",
                 value: storage.settings.suffix,
-                onChange: (v) => { storage.settings.suffix = v; }
-            })
+                onChange: (v: string) => { storage.settings.suffix = v; }
+            }),
+            storage.settings.showPrefix && React.createElement(
+                View,
+                { style: { padding: 16, backgroundColor: "#2b2d31", marginHorizontal: 16, marginTop: 8, borderRadius: 8 } },
+                React.createElement(Text, {
+                    style: { color: "#b5bac1", fontSize: 13 }
+                }, `Preview: ${storage.settings.prefix}YourNickname${storage.settings.suffix}`)
+            )
         ),
         React.createElement(FormDivider, null),
         React.createElement(
@@ -293,7 +352,7 @@ function SettingsPage() {
                         },
                         React.createElement(Text, {
                             style: { color: "#fff", fontWeight: "bold", marginBottom: 4 }
-                        }, nickname),
+                        }, nickname as string),
                         React.createElement(Text, {
                             style: { color: "#888", fontSize: 12, marginBottom: 8 }
                         }, getUserInfo(userId)),
@@ -312,7 +371,7 @@ function SettingsPage() {
                                     onPress: () => promptSetNickname(userId, getUserInfo(userId))
                                 },
                                 React.createElement(Text, {
-                                    style: { color: "#fff", textAlign: "center", fontSize: 12 }
+                                    style: { color: "#fff", textAlign: "center", fontSize: 12, fontWeight: "600" }
                                 }, "Edit")
                             ),
                             React.createElement(
@@ -326,14 +385,11 @@ function SettingsPage() {
                                     },
                                     onPress: () => {
                                         setNickname(userId, "");
-                                        const ToastModule = findByProps("showToast");
-                                        if (ToastModule?.showToast) {
-                                            ToastModule.showToast("Nickname removed", 1);
-                                        }
+                                        showToast("Nickname removed");
                                     }
                                 },
                                 React.createElement(Text, {
-                                    style: { color: "#fff", textAlign: "center", fontSize: 12 }
+                                    style: { color: "#fff", textAlign: "center", fontSize: 12, fontWeight: "600" }
                                 }, "Delete")
                             )
                         )
@@ -354,10 +410,7 @@ function SettingsPage() {
                 onPress: () => {
                     const json = JSON.stringify(storage.nicknames, null, 2);
                     RN.Clipboard?.setString(json);
-                    const ToastModule = findByProps("showToast");
-                    if (ToastModule?.showToast) {
-                        ToastModule.showToast(`Exported ${Object.keys(storage.nicknames).length} nicknames`, 1);
-                    }
+                    showToast(`Exported ${Object.keys(storage.nicknames).length} nicknames`);
                 }
             }),
             React.createElement(FormRow, {
@@ -370,24 +423,15 @@ function SettingsPage() {
                     try {
                         const clipboard = await RN.Clipboard?.getString();
                         if (!clipboard) {
-                            const ToastModule = findByProps("showToast");
-                            if (ToastModule?.showToast) {
-                                ToastModule.showToast("Clipboard is empty", 2);
-                            }
+                            showToast("Clipboard is empty", 2);
                             return;
                         }
                         
                         const parsed = JSON.parse(clipboard);
                         Object.assign(storage.nicknames, parsed);
-                        const ToastModule = findByProps("showToast");
-                        if (ToastModule?.showToast) {
-                            ToastModule.showToast(`Imported ${Object.keys(parsed).length} nicknames`, 1);
-                        }
+                        showToast(`Imported ${Object.keys(parsed).length} nicknames`);
                     } catch (e) {
-                        const ToastModule = findByProps("showToast");
-                        if (ToastModule?.showToast) {
-                            ToastModule.showToast("Invalid JSON format", 2);
-                        }
+                        showToast("Invalid JSON format", 2);
                     }
                 }
             }),
@@ -407,10 +451,7 @@ function SettingsPage() {
                         onConfirm: () => {
                             const count = Object.keys(storage.nicknames).length;
                             storage.nicknames = {};
-                            const ToastModule = findByProps("showToast");
-                            if (ToastModule?.showToast) {
-                                ToastModule.showToast(`Cleared ${count} nicknames`, 1);
-                            }
+                            showToast(`Cleared ${count} nicknames`);
                         }
                     });
                 }
@@ -420,8 +461,8 @@ function SettingsPage() {
             View,
             { style: { padding: 16, marginBottom: 20 } },
             React.createElement(Text, {
-                style: { color: "#b5bac1", fontSize: 12, textAlign: "center" }
-            }, "Nicknames Everywhere v1.0")
+                style: { color: "#b5bac1", fontSize: 12, textAlign: "center", lineHeight: 18 }
+            }, "Nicknames Everywhere v1.0\nCustom nicknames across all servers and DMs")
         )
     );
 }
@@ -430,24 +471,48 @@ function SettingsPage() {
 export default {
     onLoad: () => {
         try {
-            patchGetName();
-            patchMemberStore();
+            patchUserUtils();
+            patchGuildMemberStore();
             patchUserActions();
             
-            console.log(`[NicknamesEverywhere] Loaded with ${Object.keys(storage.nicknames).length} nicknames`);
+            logger.log(`[NicknamesEverywhere] Loaded with ${Object.keys(storage.nicknames).length} nicknames`);
         } catch (e) {
-            console.error("[NicknamesEverywhere] Load error:", e);
+            logger.error("[NicknamesEverywhere] Load error:", e);
         }
     },
 
     onUnload: () => {
+        // Restore UserUtils
+        if (UserUtilsModule) {
+            if (origGetName) {
+                UserUtilsModule.getName = origGetName;
+                origGetName = null;
+            }
+            if (origGetDisplayName) {
+                UserUtilsModule.getDisplayName = origGetDisplayName;
+                origGetDisplayName = null;
+            }
+            UserUtilsModule = null;
+        }
+
+        // Restore GuildMemberStore
+        if (GuildMemberStoreModule && origGetNick) {
+            GuildMemberStoreModule.getNick = origGetNick;
+            origGetNick = null;
+            GuildMemberStoreModule = null;
+        }
+
+        // Unpatch user actions
         unpatches.forEach(fn => {
             try {
                 fn();
-            } catch (e) {}
+            } catch (e) {
+                logger.error("[NicknamesEverywhere] Unpatch error:", e);
+            }
         });
         unpatches = [];
-        console.log("[NicknamesEverywhere] Unloaded");
+
+        logger.log("[NicknamesEverywhere] Unloaded. All patches restored.");
     },
     
     settings: SettingsPage
