@@ -1,13 +1,3 @@
-/**
- * Nicknames Everywhere — Kettu/Bunny Plugin
- * 
- * Set custom nicknames for any user that persist across all servers and DMs.
- * Unlike Discord's native nicknames (which are server-specific), these
- * nicknames follow the user everywhere you see them.
- *
- * Created by: [Your Name]
- */
-
 import { findByProps, findByName } from "@vendetta/metro";
 import { after } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
