@@ -162,11 +162,13 @@ function patchGuildMemberStore() {
 
 function patchUserActions() {
     try {
-        // Try multiple possible module locations
+        // The profile action sheet uses a LazyActionSheet pattern
+        // We need to find the function that builds the action items array
         const actionModules = [
             findByProps("openUserContextMenu"),
             findByProps("showUserActionSheet"),
-            findByProps("getUserActions"),
+            findByProps("openContextMenuLazy"),
+            findByProps("openUserContextMenuForUser"),
         ].filter(Boolean);
 
         if (actionModules.length === 0) {
@@ -174,8 +176,23 @@ function patchUserActions() {
             return;
         }
 
+        let patched = false;
+
         for (const mod of actionModules) {
-            const funcNames = ["getUserActions", "getActions", "buildActions"];
+            // Try patching the main action sheet opener
+            if (typeof mod.openUserContextMenu === "function") {
+                try {
+                    const unpatch = before("openUserContextMenu", mod, (args) => {
+                        // args typically contains user info and a callback
+                        // We'll inject into the callback's result
+                    });
+                    unpatches.push(unpatch);
+                    patched = true;
+                } catch (e) {}
+            }
+
+            // Also try direct action getters
+            const funcNames = ["getUserActions", "getActions", "buildUserContextMenuItems", "getUserContextMenuItems"];
             
             for (const fname of funcNames) {
                 if (typeof mod[fname] === "function") {
@@ -183,44 +200,75 @@ function patchUserActions() {
                         const unpatch = after(fname, mod, (args, actions) => {
                             if (!Array.isArray(actions)) return actions;
                             
-                            const user = args[0]?.user || args[0];
-                            if (!user?.id) return actions;
+                            // Extract user from various possible argument patterns
+                            const user = args[0]?.user || args[0]?.userId || args[0];
+                            let userId = null;
                             
-                            const currentNick = storage.nicknames[user.id];
-                            const displayName = user.globalName || user.username || "User";
+                            if (typeof user === "string") {
+                                userId = user;
+                            } else if (user?.id) {
+                                userId = user.id;
+                            }
                             
-                            // Add Set/Edit Nickname option
-                            actions.push({
-                                key: "set-nickname",
-                                label: currentNick ? "✏️ Edit Nickname" : "✏️ Set Nickname",
+                            if (!userId) return actions;
+                            
+                            const currentNick = storage.nicknames[userId];
+                            const displayName = user?.globalName || user?.username || "User";
+                            
+                            // Find the position to insert (after "Add Friend Nickname" or before "Block")
+                            let insertIndex = actions.findIndex(a => 
+                                a?.label?.includes("Block") || 
+                                a?.key === "block" ||
+                                a?.label?.includes("Ignore")
+                            );
+                            
+                            if (insertIndex === -1) {
+                                insertIndex = actions.length;
+                            }
+                            
+                            // Create our nickname actions
+                            const nicknameActions = [];
+                            
+                            // Set/Edit Nickname button
+                            nicknameActions.push({
+                                key: "set-custom-nickname",
+                                label: currentNick ? "Edit Custom Nickname" : "Set Custom Nickname",
                                 icon: "ic_edit",
-                                onPress: () => promptSetNickname(user.id, displayName)
+                                onPress: () => promptSetNickname(userId, displayName)
                             });
                             
-                            // Add Remove option if nickname exists
+                            // Remove Nickname button (only if exists)
                             if (currentNick) {
-                                actions.push({
-                                    key: "remove-nickname",
-                                    label: "🗑️ Remove Nickname",
+                                nicknameActions.push({
+                                    key: "remove-custom-nickname",
+                                    label: "Remove Custom Nickname",
                                     icon: "ic_message_delete",
                                     destructive: true,
                                     onPress: () => {
-                                        setNickname(user.id, "");
-                                        showToast("Nickname removed");
+                                        setNickname(userId, "");
+                                        showToast("Custom nickname removed");
                                     }
                                 });
                             }
+                            
+                            // Insert before Block button
+                            actions.splice(insertIndex, 0, ...nicknameActions);
                             
                             return actions;
                         });
                         
                         unpatches.push(unpatch);
-                        logger.log(`[NicknamesEverywhere] Patched ${fname} in user actions`);
+                        patched = true;
+                        logger.log(`[NicknamesEverywhere] Patched ${fname}`);
                     } catch (e) {
                         // Try next function
                     }
                 }
             }
+        }
+
+        if (!patched) {
+            logger.warn("[NicknamesEverywhere] Could not patch user action menu");
         }
     } catch (e) {
         logger.error("[NicknamesEverywhere] Error patching user actions:", e);
